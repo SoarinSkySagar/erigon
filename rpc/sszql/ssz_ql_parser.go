@@ -1,6 +1,13 @@
 package sszql
 
-import "strconv"
+import (
+	"encoding/binary"
+	"fmt"
+	"regexp"
+	"strconv"
+)
+
+type Raw []byte
 
 func parseQuery(request SSZQLRequest, version int, block_id string) SSZQLResponse {
 	response := SSZQLResponse{
@@ -27,8 +34,55 @@ func parseQueries(req SSZQLRequest, res *SSZQLResponse) []SSZQuery {
 	return req.Queries
 }
 
-func parseFilters(filters Filter) []string {
-	var ret []string
+func parseFilters(filter Filter, path Path, aliases map[string]string) Raw {
+	ops := map[string]bool{
+		"==": true, "!=": true, ">": true, "<": true,
+		">=": true, "<=": true, "&&": true, "||": true,
+	}
+
+	var tokenPattern = regexp.MustCompile(
+		`==|!=|>=|<=|&&|\|\||>|<|\.[a-zA-Z_][a-zA-Z0-9_]*|0x[a-fA-F0-9]+|[0-9]+(\.[0-9]+)?|[a-zA-Z_][a-zA-Z0-9_]*`,
+	)
+
+	tokens := tokenPattern.FindAllString(string(filter), -1)
+
+	values := make(map[int][]Raw)
+
+	for i, token := range tokens {
+		runes := []rune(token)
+		if ops[token] {
+			continue
+		}
+		var bytes []Raw
+		switch runes[0] {
+		case '$':
+			bytes = convertToRaw(aliases[string(runes[1:])])
+		case '.':
+			bytes = getValueFromPath(Path(runes[1:]))
+		default:
+			num, err := strconv.Atoi(string(runes))
+			if err != nil {
+				fmt.Println("Conversion error:", err)
+				return nil
+			}
+			buf := make([]byte, 64)
+			binary.BigEndian.PutUint64(buf, uint64(num))
+			bytes = append(bytes, buf)
+		}
+		values[i] = bytes
+	}
+	var ret Raw
+	return ret
+}
+
+func convertToRaw(in string) []Raw {
+	var ret []Raw
+	return ret
+}
+
+func getValueFromPath(path Path) []Raw {
+	var str string
+	ret := convertToRaw(str)
 	return ret
 }
 
