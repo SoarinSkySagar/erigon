@@ -40,6 +40,14 @@ func parseFilters(filter Filter, path Path, aliases map[string]string) ([]Raw, e
 	return node.Eval(&EvalContext{Aliases: aliases, Root: path})
 }
 
+func filterPath(path Path, filter Filter, aliases map[string]string) ([]Raw, error) {
+	mask, err := parseFilters(filter, path, aliases)
+	if err != nil {
+		return nil, err
+	}
+	return applyFilter(getValueFromPath(path), mask)
+}
+
 func convertToRaw(in string) []Raw {
 	if in == "" {
 		return nil

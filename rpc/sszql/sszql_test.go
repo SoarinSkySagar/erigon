@@ -222,6 +222,83 @@ func TestParseFiltersError(t *testing.T) {
 	}
 }
 
+func TestApplyFilter(t *testing.T) {
+	v1, v2, v3 := Raw{0x01}, Raw{0x02}, Raw{0x03}
+	tests := []struct {
+		name   string
+		values []Raw
+		mask   []Raw
+		want   []Raw
+	}{
+		{"keeps only first", []Raw{v1, v2, v3}, []Raw{tru, fal, fal}, []Raw{v1}},
+		{"keeps trailing", []Raw{v1, v2, v3}, []Raw{fal, tru, tru}, []Raw{v2, v3}},
+		{"all true", []Raw{v1, v2}, []Raw{tru, tru}, []Raw{v1, v2}},
+		{"all false", []Raw{v1, v2}, []Raw{fal, fal}, []Raw{}},
+		{"empty", []Raw{}, []Raw{}, []Raw{}},
+		{"multibyte truthy mask", []Raw{v1, v2}, []Raw{{0x00, 0x01}, fal}, []Raw{v1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := applyFilter(tt.values, tt.mask)
+			if err != nil {
+				t.Fatalf("applyFilter unexpected error: %v", err)
+			}
+			if !rawsEqual(got, tt.want) {
+				t.Errorf("applyFilter = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyFilterLengthMismatch(t *testing.T) {
+	if _, err := applyFilter([]Raw{{0x01}}, []Raw{tru, fal}); err == nil {
+		t.Fatal("applyFilter with mismatched lengths: want error, got nil")
+	}
+}
+
+func TestFilterPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   Path
+		filter Filter
+		want   []Raw
+	}{
+		{"lt keeps first", ".arr", ".arr < 2", []Raw{{0x01}}},
+		{"gte keeps tail", ".arr", ".arr >= 2", []Raw{{0x02}, {0x03}}},
+		{"eq keeps one", ".arr", ".arr == 2", []Raw{{0x02}}},
+		{"in keeps subset", ".arr", ".arr in [2,3]", []Raw{{0x02}, {0x03}}},
+		{"cross-path mask", ".arr", ".arr2 > 2", []Raw{{0x02}, {0x03}}},
+		{"four elem gt", ".arr4", ".arr4 > 2", []Raw{{0x03}, {0x04}}},
+		{"compound predicate", ".arr4", ".arr4 > 1 && .arr4 < 4", []Raw{{0x02}, {0x03}}},
+		{"alias predicate", ".arr4", ".arr4 < $five", []Raw{{0x01}, {0x02}, {0x03}, {0x04}}},
+		{"none match", ".arr", ".arr > 9", []Raw{}},
+	}
+	aliases := testAliases()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := filterPath(tt.path, tt.filter, aliases)
+			if err != nil {
+				t.Fatalf("filterPath(%q, %q) unexpected error: %v", tt.path, tt.filter, err)
+			}
+			if !rawsEqual(got, tt.want) {
+				t.Errorf("filterPath(%q, %q) = %v, want %v", tt.path, tt.filter, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFilterPathLengthMismatch(t *testing.T) {
+	if _, err := filterPath(".arr", ".arr4 == .arr4", testAliases()); err == nil {
+		t.Fatal("filterPath with mask longer than path values: want error, got nil")
+	}
+}
+
+func TestFilterPathParseErrorPropagates(t *testing.T) {
+	if _, err := filterPath(".arr", ".arr <", testAliases()); err == nil {
+		t.Fatal("filterPath with malformed filter: want parse error, got nil")
+	}
+}
+
 func TestParseFiltersNilAliases(t *testing.T) {
 	if _, err := parseFilters(`$five == 5`, ".root", nil); err == nil {
 		t.Fatal("parseFilters with nil aliases and alias reference: want error, got nil")

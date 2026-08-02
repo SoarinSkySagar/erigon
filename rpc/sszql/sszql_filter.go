@@ -120,6 +120,19 @@ func applyComparison(left []Raw, op string, right []Raw) ([]Raw, error) {
 	}
 }
 
+func applyFilter(values, mask []Raw) ([]Raw, error) {
+	if len(values) != len(mask) {
+		return nil, fmt.Errorf("applyFilter: length mismatch (values=%d, mask=%d)", len(values), len(mask))
+	}
+	out := make([]Raw, 0, len(values))
+	for i, v := range values {
+		if rawToBool(mask[i]) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
 func compareScalar(l Raw, op string, r Raw) (Raw, error) {
 	c := compareRaw(l, r)
 	switch op {
