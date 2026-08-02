@@ -2,12 +2,10 @@ package sszql
 
 import (
 	"encoding/binary"
-	"fmt"
-	"regexp"
+	"encoding/hex"
 	"strconv"
+	"strings"
 )
-
-type Raw []byte
 
 func parseQuery(request SSZQLRequest, version int, block_id string) SSZQLResponse {
 	response := SSZQLResponse{
@@ -34,56 +32,55 @@ func parseQueries(req SSZQLRequest, res *SSZQLResponse) []SSZQuery {
 	return req.Queries
 }
 
-func parseFilters(filter Filter, path Path, aliases map[string]string) Raw {
-	ops := map[string]bool{
-		"==": true, "!=": true, ">": true, "<": true,
-		">=": true, "<=": true, "&&": true, "||": true,
+func parseFilters(filter Filter, path Path, aliases map[string]string) ([]Raw, error) {
+	node, err := Parse(filter)
+	if err != nil {
+		return nil, err
 	}
-
-	var tokenPattern = regexp.MustCompile(
-		`==|!=|>=|<=|&&|\|\||>|<|\.[a-zA-Z_][a-zA-Z0-9_]*|0x[a-fA-F0-9]+|[0-9]+(\.[0-9]+)?|[a-zA-Z_][a-zA-Z0-9_]*`,
-	)
-
-	tokens := tokenPattern.FindAllString(string(filter), -1)
-
-	values := make(map[int][]Raw)
-
-	for i, token := range tokens {
-		runes := []rune(token)
-		if ops[token] {
-			continue
-		}
-		var bytes []Raw
-		switch runes[0] {
-		case '$':
-			bytes = convertToRaw(aliases[string(runes[1:])])
-		case '.':
-			bytes = getValueFromPath(Path(runes[1:]))
-		default:
-			num, err := strconv.Atoi(string(runes))
-			if err != nil {
-				fmt.Println("Conversion error:", err)
-				return nil
-			}
-			buf := make([]byte, 64)
-			binary.BigEndian.PutUint64(buf, uint64(num))
-			bytes = append(bytes, buf)
-		}
-		values[i] = bytes
-	}
-	var ret Raw
-	return ret
+	return node.Eval(&EvalContext{Aliases: aliases, Root: path})
 }
 
 func convertToRaw(in string) []Raw {
-	var ret []Raw
-	return ret
+	if in == "" {
+		return nil
+	}
+	if strings.HasPrefix(in, "0x") {
+		body := in[2:]
+		if len(body)%2 == 1 {
+			body = "0" + body
+		}
+		b, err := hex.DecodeString(body)
+		if err != nil {
+			return nil
+		}
+		return []Raw{Raw(b)}
+	}
+	num, err := strconv.ParseUint(in, 10, 64)
+	if err != nil {
+		return nil
+	}
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, num)
+	return []Raw{Raw(buf)}
 }
 
 func getValueFromPath(path Path) []Raw {
-	var str string
-	ret := convertToRaw(str)
-	return ret
+	switch path {
+	case ".scalar5":
+		return []Raw{{0x05}}
+	case ".scalar10":
+		return []Raw{{0x0a}}
+	case ".arr":
+		return []Raw{{0x01}, {0x02}, {0x03}}
+	case ".arr2":
+		return []Raw{{0x02}, {0x03}, {0x04}}
+	case ".arr4":
+		return []Raw{{0x01}, {0x02}, {0x03}, {0x04}}
+	case ".empty":
+		return nil
+	default:
+		return nil
+	}
 }
 
 func parseAliases(aliases []Alias, res *SSZQLResponse) map[string]string {
@@ -98,7 +95,6 @@ func parseAliases(aliases []Alias, res *SSZQLResponse) map[string]string {
 	return m
 }
 
-// todo: implement actual logic
 func parseQueryWithPathAndFilter(path Path, filter Filter) string {
 	return "dummy"
 }

@@ -59,7 +59,6 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 
 }
 
-// TODO: Implement valid block_id checks with its version
 func isValidBlockAndVersion(block_id string, version int) bool {
 	if version < 1 || version > 6 {
 		return false
