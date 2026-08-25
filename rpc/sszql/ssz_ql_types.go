@@ -1,5 +1,10 @@
 package sszql
 
+import (
+	"github.com/erigontech/erigon/cl/beacon/beaconhttp"
+	"github.com/erigontech/erigon/rpc"
+)
+
 // note: derived types of Proof and Leaf can change later
 
 type Path string
@@ -15,6 +20,11 @@ type Proof string
 type Leaf string
 
 type Result string
+
+type blockRef struct {
+	execution rpc.BlockNumberOrHash
+	consensus beaconhttp.SegmentID
+}
 
 type ResolvedPath struct {
 	Gindex Gindex

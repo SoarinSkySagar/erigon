@@ -2,21 +2,13 @@ package sszql
 
 import (
 	"encoding/json"
-	"errors"
 	"mime"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/erigontech/erigon/common"
-	"github.com/erigontech/erigon/rpc"
 )
 
 const sszQLContentType = "application/json"
-
-var blockIDPattern = regexp.MustCompile(`^(?:latest|earliest|safe|finalized|pending|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
-var errInvalidBlockID = errors.New("invalid block_id")
 
 func SSZQueryHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,30 +24,27 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	segment := r.PathValue("version")
-	if !strings.HasPrefix(segment, "v") {
-		writeQueryError(w, http.StatusNotFound, "invalid version segment")
+	versionValue := r.PathValue("version")
+	if !strings.HasPrefix(versionValue, "v") {
+		writeQueryError(w, http.StatusNotFound, "invalid version")
 		return
 	}
 
-	v := strings.TrimPrefix(segment, "v")
+	v := strings.TrimPrefix(versionValue, "v")
 	if len(v) > 1 && v[0] == '0' {
-		writeQueryError(w, http.StatusNotFound, "invalid version segment")
+		writeQueryError(w, http.StatusNotFound, "invalid version")
 		return
 	}
 	parsed, err := strconv.ParseUint(v, 10, 8)
 	if err != nil {
-		writeQueryError(w, http.StatusNotFound, "invalid version segment")
+		writeQueryError(w, http.StatusNotFound, "invalid version")
 		return
 	}
 	version := uint(parsed)
 
 	blockID := r.PathValue("blockID")
 
-	if !isValidBlockAndVersion(blockID, version) {
-		writeQueryError(w, http.StatusNotFound, "invalid version segment")
-		return
-	}
+	layer := r.PathValue("layer")
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
@@ -76,17 +65,11 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bnh, err := parseBlockIDs(blockID)
-	if err != nil {
-		writeQueryError(w, http.StatusNotFound, err.Error())
-		return
-	}
-
 	var res SSZQLResponse
 
 	switch version {
 	case 1:
-		res, err = parseQueryV1(req, version, bnh)
+		res, err = parseQueryV1(req, version, layer, blockID)
 	default:
 		writeQueryError(w, http.StatusNotFound, "unsupported API version")
 		return
@@ -98,14 +81,6 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeQueryResponse(w, res)
-}
-
-func isValidBlockAndVersion(blockID string, version uint) bool {
-	if version < 1 || version > 6 {
-		return false
-	}
-
-	return true
 }
 
 type queryError struct {
@@ -135,34 +110,4 @@ func writeQueryResponse(w http.ResponseWriter, res SSZQLResponse) {
 	w.Header().Set("Content-Type", sszQLContentType)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(append(b, '\n'))
-}
-
-func parseBlockIDs(blockID string) (rpc.BlockNumberOrHash, error) {
-
-	if !blockIDPattern.MatchString(blockID) {
-		return rpc.BlockNumberOrHash{}, errInvalidBlockID
-	}
-
-	switch blockID {
-	case "latest":
-		return rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber), nil
-	case "earliest":
-		return rpc.BlockNumberOrHashWithNumber(rpc.EarliestBlockNumber), nil
-	case "safe":
-		return rpc.BlockNumberOrHashWithNumber(rpc.SafeBlockNumber), nil
-	case "finalized":
-		return rpc.BlockNumberOrHashWithNumber(rpc.FinalizedBlockNumber), nil
-	case "pending":
-		return rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber), nil
-	}
-
-	if len(blockID) == 66 {
-		return rpc.BlockNumberOrHashWithHash(common.HexToHash(blockID), false), nil
-	}
-
-	n, err := strconv.ParseUint(blockID, 10, 63)
-	if err != nil {
-		return rpc.BlockNumberOrHash{}, errInvalidBlockID
-	}
-	return rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(n)), nil
 }

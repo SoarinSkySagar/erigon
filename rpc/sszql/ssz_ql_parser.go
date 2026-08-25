@@ -1,12 +1,20 @@
 package sszql
 
 import (
+	"errors"
+	"regexp"
 	"strconv"
 
+	"github.com/erigontech/erigon/cl/beacon/beaconhttp"
+	"github.com/erigontech/erigon/common"
 	"github.com/erigontech/erigon/rpc"
 )
 
-func parseQueryV1(request SSZQLRequest, version uint, blockID rpc.BlockNumberOrHash) (SSZQLResponse, error) {
+var executionBlockIDPattern = regexp.MustCompile(`^(?:latest|earliest|safe|finalized|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
+var consensusBlockIDPattern = regexp.MustCompile(`^(?:head|genesis|finalized|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
+var errInvalidBlockID = errors.New("invalid block_id")
+
+func parseQueryV1(request SSZQLRequest, version uint, layer string, blockID string) (SSZQLResponse, error) {
 	response := SSZQLResponse{
 		Paths:    make([]Path, 0),
 		Gindices: make([]Gindex, 0),
@@ -14,11 +22,12 @@ func parseQueryV1(request SSZQLRequest, version uint, blockID rpc.BlockNumberOrH
 		Results:  make([]Result, 0),
 	}
 	emptyRes := response
-	aliases, err := parseAliases(request.Aliases, &response, blockID)
+	var temp rpc.BlockNumberOrHash
+	aliases, err := parseAliases(request.Aliases, &response, temp)
 	if err != nil {
 		return emptyRes, err
 	}
-	err = parseQueries(request, &response, blockID, aliases)
+	err = parseQueries(request, &response, temp, aliases)
 	if err != nil {
 		return emptyRes, err
 	}
@@ -34,7 +43,7 @@ func parseQueryV1(request SSZQLRequest, version uint, blockID rpc.BlockNumberOrH
 
 func parseQueries(req SSZQLRequest, res *SSZQLResponse, blockID rpc.BlockNumberOrHash, aliases map[string]string) error {
 	for _, query := range req.Queries {
-		resolvedPath, err := resolvePath(query.Path, query.Anchor, blockID)
+		resolvedPath, err := resolveExecutionPath(query.Path, query.Anchor, blockID)
 		if err != nil {
 			return err
 		}
@@ -51,7 +60,7 @@ func parseAliases(aliases []Alias, res *SSZQLResponse, blockID rpc.BlockNumberOr
 	m := make(map[string]string)
 
 	for _, alias := range aliases {
-		resolvedPath, err := resolvePath(alias.Path, alias.Anchor, blockID)
+		resolvedPath, err := resolveExecutionPath(alias.Path, alias.Anchor, blockID)
 		if err != nil {
 			return nil, err
 		}
@@ -62,7 +71,16 @@ func parseAliases(aliases []Alias, res *SSZQLResponse, blockID rpc.BlockNumberOr
 	return m, nil
 }
 
-func resolvePath(path Path, anchor Anchor, blockID rpc.BlockNumberOrHash) (ResolvedPath, error) {
+func resolveExecutionPath(path Path, anchor Anchor, blockID rpc.BlockNumberOrHash) (ResolvedPath, error) {
+	response := ResolvedPath{
+		Gindex: Gindex(99),
+		Leaf:   Leaf("0xabcdef"),
+		Value:  Result("0xabcdef"),
+	}
+	return response, nil
+}
+
+func resolveConsensusPath(path Path, anchor Anchor, blockID beaconhttp.SegmentID) (ResolvedPath, error) {
 	response := ResolvedPath{
 		Gindex: Gindex(99),
 		Leaf:   Leaf("0xabcdef"),
@@ -79,4 +97,56 @@ func generateProof(res *SSZQLResponse) error {
 		res.Proofs = append(res.Proofs, proof)
 	}
 	return nil
+}
+
+func parseExecutionBlockID(blockID string) (rpc.BlockNumberOrHash, error) {
+	if !executionBlockIDPattern.MatchString(blockID) {
+		return rpc.BlockNumberOrHash{}, errInvalidBlockID
+	}
+
+	switch blockID {
+	case "latest":
+		return rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber), nil
+	case "earliest":
+		return rpc.BlockNumberOrHashWithNumber(rpc.EarliestBlockNumber), nil
+	case "safe":
+		return rpc.BlockNumberOrHashWithNumber(rpc.SafeBlockNumber), nil
+	case "finalized":
+		return rpc.BlockNumberOrHashWithNumber(rpc.FinalizedBlockNumber), nil
+	}
+
+	if len(blockID) == 66 {
+		return rpc.BlockNumberOrHashWithHash(common.HexToHash(blockID), false), nil
+	}
+
+	n, err := strconv.ParseUint(blockID, 10, 63)
+	if err != nil {
+		return rpc.BlockNumberOrHash{}, errInvalidBlockID
+	}
+	return rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(n)), nil
+}
+
+func parseConsensusBlockID(blockID string) (beaconhttp.SegmentID, error) {
+	if !consensusBlockIDPattern.MatchString(blockID) {
+		return beaconhttp.SegmentID{}, errInvalidBlockID
+	}
+
+	switch blockID {
+	case "head":
+		return beaconhttp.SegmentIDWithTag(beaconhttp.Head), nil
+	case "genesis":
+		return beaconhttp.SegmentIDWithTag(beaconhttp.Genesis), nil
+	case "finalized":
+		return beaconhttp.SegmentIDWithTag(beaconhttp.Finalized), nil
+	}
+
+	if len(blockID) == 66 {
+		return beaconhttp.SegmentIDWithRoot(common.HexToHash(blockID)), nil
+	}
+
+	slot, err := strconv.ParseUint(blockID, 10, 64)
+	if err != nil {
+		return beaconhttp.SegmentID{}, errInvalidBlockID
+	}
+	return beaconhttp.SegmentIDWithSlot(slot), nil
 }

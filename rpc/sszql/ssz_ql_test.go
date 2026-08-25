@@ -136,8 +136,10 @@ func TestRouteRedirectsNonCanonicalPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
 			rec := doRequest(t, http.MethodPost, tt.path, validQueryBody)
-			if rec.Code != http.StatusMovedPermanently {
-				t.Errorf("got status %d, want %d", rec.Code, http.StatusMovedPermanently)
+			// Which redirect code ServeMux picks is a stdlib detail: 301 up to
+			// Go 1.25, 307 from Go 1.26. Only the redirect itself is ours.
+			if rec.Code < 300 || rec.Code > 399 {
+				t.Errorf("got status %d, want a redirect", rec.Code)
 			}
 			if got := rec.Header().Get("Location"); got != tt.wantLocation {
 				t.Errorf("Location: got %q, want %q", got, tt.wantLocation)
