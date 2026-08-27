@@ -45,6 +45,11 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 	blockID := r.PathValue("blockID")
 
 	layer := r.PathValue("layer")
+	bnh, err := parseBlockIDs(blockID)
+	if err != nil {
+		writeQueryError(w, http.StatusNotFound, err.Error())
+		return
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
