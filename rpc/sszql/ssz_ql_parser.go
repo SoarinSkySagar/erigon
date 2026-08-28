@@ -2,19 +2,20 @@ package sszql
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 
 	"github.com/erigontech/erigon/cl/beacon/beaconhttp"
-	"github.com/erigontech/erigon/common"
 	"github.com/erigontech/erigon/rpc"
 )
 
-var executionBlockIDPattern = regexp.MustCompile(`^(?:latest|earliest|safe|finalized|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
+var executionBlockIDPattern = regexp.MustCompile(`^(?:latest|earliest|safe|finalized|pending|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
 var consensusBlockIDPattern = regexp.MustCompile(`^(?:head|genesis|finalized|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
 var errInvalidBlockID = errors.New("invalid block_id")
+var errInvalidLayer = errors.New("invalid layer")
 
-func parseQueryV1(request SSZQLRequest, version uint, layer string, blockID string) (SSZQLResponse, error) {
+func parseQueryV1(request SSZQLRequest, version uint, block BlockRef) (SSZQLResponse, error) {
 	response := SSZQLResponse{
 		Paths:    make([]Path, 0),
 		Gindices: make([]Gindex, 0),
@@ -101,56 +102,4 @@ func generateProof(res *SSZQLResponse) error {
 		res.Proofs = append(res.Proofs, proof)
 	}
 	return nil
-}
-
-func parseExecutionBlockID(blockID string) (rpc.BlockNumberOrHash, error) {
-	if !executionBlockIDPattern.MatchString(blockID) {
-		return rpc.BlockNumberOrHash{}, errInvalidBlockID
-	}
-
-	switch blockID {
-	case "latest":
-		return rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber), nil
-	case "earliest":
-		return rpc.BlockNumberOrHashWithNumber(rpc.EarliestBlockNumber), nil
-	case "safe":
-		return rpc.BlockNumberOrHashWithNumber(rpc.SafeBlockNumber), nil
-	case "finalized":
-		return rpc.BlockNumberOrHashWithNumber(rpc.FinalizedBlockNumber), nil
-	}
-
-	if len(blockID) == 66 {
-		return rpc.BlockNumberOrHashWithHash(common.HexToHash(blockID), false), nil
-	}
-
-	n, err := strconv.ParseUint(blockID, 10, 63)
-	if err != nil {
-		return rpc.BlockNumberOrHash{}, errInvalidBlockID
-	}
-	return rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(n)), nil
-}
-
-func parseConsensusBlockID(blockID string) (beaconhttp.SegmentID, error) {
-	if !consensusBlockIDPattern.MatchString(blockID) {
-		return beaconhttp.SegmentID{}, errInvalidBlockID
-	}
-
-	switch blockID {
-	case "head":
-		return beaconhttp.SegmentIDWithTag(beaconhttp.Head), nil
-	case "genesis":
-		return beaconhttp.SegmentIDWithTag(beaconhttp.Genesis), nil
-	case "finalized":
-		return beaconhttp.SegmentIDWithTag(beaconhttp.Finalized), nil
-	}
-
-	if len(blockID) == 66 {
-		return beaconhttp.SegmentIDWithRoot(common.HexToHash(blockID)), nil
-	}
-
-	slot, err := strconv.ParseUint(blockID, 10, 64)
-	if err != nil {
-		return beaconhttp.SegmentID{}, errInvalidBlockID
-	}
-	return beaconhttp.SegmentIDWithSlot(slot), nil
 }

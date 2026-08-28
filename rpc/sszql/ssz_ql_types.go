@@ -21,7 +21,7 @@ type Leaf string
 
 type Result string
 
-type blockRef struct {
+type BlockRef struct {
 	execution rpc.BlockNumberOrHash
 	consensus beaconhttp.SegmentID
 }

@@ -18,7 +18,7 @@ const validHash = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890a
 // queryPattern mirrors the route registered in cmd/rpcdaemon/cli/config.go.
 // The wildcard names must match what the handler reads via r.PathValue.
 const (
-	queryPattern              = "POST /eth/{version}/execution/{blockID}/query"
+	queryPattern              = "POST /eth/{version}/{layer}/{blockID}/query"
 	queryTrailingSlashPattern = queryPattern + "/{$}"
 )
 
@@ -81,11 +81,31 @@ func TestRouteMatchesQueryEndpoint(t *testing.T) {
 		"/eth/v1/execution/pending/query",
 		"/eth/v1/execution/" + validHash + "/query",
 		"/eth/v1/execution/123/query/",
+		"/eth/v1/consensus/123/query",
+		"/eth/v1/consensus/head/query",
+		"/eth/v1/consensus/genesis/query",
+		"/eth/v1/consensus/finalized/query",
+		"/eth/v1/consensus/" + validHash + "/query",
 	} {
 		t.Run(path, func(t *testing.T) {
 			rec := doRequest(t, http.MethodPost, path, validQueryBody)
 			if rec.Code != http.StatusOK {
 				t.Errorf("got status %d, want %d (body %q)", rec.Code, http.StatusOK, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestRouteRejectsUnknownLayer(t *testing.T) {
+	for _, path := range []string{
+		"/eth/v1/EXECUTION/123/query",
+		"/eth/v1/beacon/123/query",
+		"/eth/v1/exec/123/query",
+	} {
+		t.Run(path, func(t *testing.T) {
+			rec := doRequest(t, http.MethodPost, path, validQueryBody)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("got status %d, want %d (body %q)", rec.Code, http.StatusNotFound, rec.Body.String())
 			}
 		})
 	}
@@ -104,9 +124,7 @@ func TestRouteFallsThroughToJSONRPC(t *testing.T) {
 		{"too many segments", http.MethodPost, "/eth/v1/execution/123/extra/query"},
 		{"subtree below query", http.MethodPost, "/eth/v1/execution/123/query/extra"},
 		{"wrong root", http.MethodPost, "/beacon/v1/execution/123/query"},
-		{"wrong domain", http.MethodPost, "/eth/v1/consensus/123/query"},
 		{"wrong suffix", http.MethodPost, "/eth/v1/execution/123/prove"},
-		{"uppercase literal", http.MethodPost, "/eth/v1/EXECUTION/123/query"},
 		{"health check on query path", http.MethodGet, "/eth/v1/execution/123/query"},
 		{"health check on near-miss path", http.MethodGet, "/eth/foo/query"},
 		{"put on query path", http.MethodPut, "/eth/v1/execution/123/query"},
