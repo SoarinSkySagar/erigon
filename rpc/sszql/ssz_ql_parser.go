@@ -3,17 +3,10 @@ package sszql
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 
-	"github.com/erigontech/erigon/cl/beacon/beaconhttp"
 	"github.com/erigontech/erigon/rpc"
 )
-
-var executionBlockIDPattern = regexp.MustCompile(`^(?:latest|earliest|safe|finalized|pending|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
-var consensusBlockIDPattern = regexp.MustCompile(`^(?:head|genesis|finalized|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
-var errInvalidBlockID = errors.New("invalid block_id")
-var errInvalidLayer = errors.New("invalid layer")
 
 func parseQueryV1(request SSZQLRequest, version uint, block BlockRef) (SSZQLResponse, error) {
 	response := SSZQLResponse{
@@ -85,14 +78,14 @@ func resolveExecutionPath(path Path, anchor Anchor, blockID rpc.BlockNumberOrHas
 	return response, nil
 }
 
-func resolveConsensusPath(path Path, anchor Anchor, blockID beaconhttp.SegmentID) (ResolvedPath, error) {
-	response := ResolvedPath{
-		Gindex: Gindex(99),
-		Leaf:   Leaf("0xabcdef"),
-		Value:  Result("0xabcdef"),
-	}
-	return response, nil
-}
+// func resolveConsensusPath(path Path, anchor Anchor, blockID beaconhttp.SegmentID) (ResolvedPath, error) {
+// 	response := ResolvedPath{
+// 		Gindex: Gindex(99),
+// 		Leaf:   Leaf("0xabcdef"),
+// 		Value:  Result("0xabcdef"),
+// 	}
+// 	return response, nil
+// }
 
 func generateProof(res *SSZQLResponse) error {
 	proofs := make([]Proof, 0, len(res.Results))

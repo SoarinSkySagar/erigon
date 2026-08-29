@@ -2,8 +2,10 @@ package sszql
 
 import (
 	"encoding/json"
+	"errors"
 	"mime"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -13,6 +15,11 @@ import (
 )
 
 const sszQLContentType = "application/json"
+
+var executionBlockIDPattern = regexp.MustCompile(`^(?:latest|earliest|safe|finalized|pending|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
+var consensusBlockIDPattern = regexp.MustCompile(`^(?:head|genesis|finalized|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
+var errInvalidBlockID = errors.New("invalid block_id")
+var errInvalidLayer = errors.New("invalid layer")
 
 func SSZQueryHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,11 +102,6 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeQueryResponse(w, res)
-}
-
-type queryError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
 }
 
 func writeQueryError(w http.ResponseWriter, code int, message string) {
