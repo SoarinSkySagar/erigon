@@ -1,5 +1,12 @@
 package sszql
 
+import (
+	"github.com/erigontech/erigon/cl/beacon/beaconhttp"
+	"github.com/erigontech/erigon/cl/cltypes"
+	"github.com/erigontech/erigon/execution/types"
+	"github.com/erigontech/erigon/rpc"
+)
+
 // note: derived types of Proof and Leaf can change later
 
 type Path string
@@ -15,6 +22,16 @@ type Proof string
 type Leaf string
 
 type Result string
+
+type BlockRef struct {
+	execution rpc.BlockNumberOrHash
+	consensus beaconhttp.SegmentID
+}
+
+type Block struct {
+	consensus cltypes.SignedBeaconBlock
+	execution types.Block
+}
 
 type ResolvedPath struct {
 	Gindex Gindex
@@ -55,4 +72,9 @@ type SSZQLResponse struct {
 	Leaves   []Leaf          `json:"leaves"`
 	Results  []Result        `json:"results"`
 	Proofs   []Proof         `json:"proofs,omitempty"`
+}
+
+type queryError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }

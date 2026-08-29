@@ -68,6 +68,18 @@ func (c *SegmentID) GetRoot() *common.Hash {
 	return c.root
 }
 
+func SegmentIDWithTag(tag chainTag) SegmentID {
+	return SegmentID{tag: tag}
+}
+
+func SegmentIDWithSlot(slot uint64) SegmentID {
+	return SegmentID{slot: &slot}
+}
+
+func SegmentIDWithRoot(root common.Hash) SegmentID {
+	return SegmentID{root: &root}
+}
+
 func EpochFromRequest(r *http.Request) (uint64, error) {
 	// Must only be a number
 	regex := regexp.MustCompile(`^\d+$`)

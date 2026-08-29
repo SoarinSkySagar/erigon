@@ -8,7 +8,7 @@ import (
 	"github.com/erigontech/erigon/rpc"
 )
 
-func parseQueryV1(request SSZQLRequest, version uint, blockID rpc.BlockNumberOrHash) (SSZQLResponse, error) {
+func parseQueryV1(request SSZQLRequest, version uint, block BlockRef) (SSZQLResponse, error) {
 	response := SSZQLResponse{
 		Paths:    make([]Path, 0),
 		Gindices: make([]Gindex, 0),
@@ -16,11 +16,12 @@ func parseQueryV1(request SSZQLRequest, version uint, blockID rpc.BlockNumberOrH
 		Results:  make([]Result, 0),
 	}
 	emptyRes := response
-	aliases, err := parseAliases(request.Aliases, &response, blockID)
+	var temp rpc.BlockNumberOrHash
+	aliases, err := parseAliases(request.Aliases, &response, temp)
 	if err != nil {
 		return emptyRes, err
 	}
-	err = parseQueries(request, &response, blockID, aliases)
+	err = parseQueries(request, &response, temp, aliases)
 	if err != nil {
 		return emptyRes, err
 	}
@@ -36,7 +37,7 @@ func parseQueryV1(request SSZQLRequest, version uint, blockID rpc.BlockNumberOrH
 
 func parseQueries(req SSZQLRequest, res *SSZQLResponse, blockID rpc.BlockNumberOrHash, aliases map[string]string) error {
 	for _, query := range req.Queries {
-		resolvedPath, err := resolvePath(query.Path, query.Anchor, blockID)
+		resolvedPath, err := resolveExecutionPath(query.Path, query.Anchor, blockID)
 		if err != nil {
 			return err
 		}
@@ -57,7 +58,7 @@ func parseAliases(aliases []Alias, res *SSZQLResponse, blockID rpc.BlockNumberOr
 			return nil, fmt.Errorf("%w: %q", errors.New("duplicate alias"), alias.Alias)
 		}
 
-		resolvedPath, err := resolvePath(alias.Path, alias.Anchor, blockID)
+		resolvedPath, err := resolveExecutionPath(alias.Path, alias.Anchor, blockID)
 		if err != nil {
 			return nil, err
 		}
@@ -68,7 +69,7 @@ func parseAliases(aliases []Alias, res *SSZQLResponse, blockID rpc.BlockNumberOr
 	return m, nil
 }
 
-func resolvePath(path Path, anchor Anchor, blockID rpc.BlockNumberOrHash) (ResolvedPath, error) {
+func resolveExecutionPath(path Path, anchor Anchor, blockID rpc.BlockNumberOrHash) (ResolvedPath, error) {
 	response := ResolvedPath{
 		Gindex: Gindex(99),
 		Leaf:   Leaf("0xabcdef"),
@@ -76,6 +77,15 @@ func resolvePath(path Path, anchor Anchor, blockID rpc.BlockNumberOrHash) (Resol
 	}
 	return response, nil
 }
+
+// func resolveConsensusPath(path Path, anchor Anchor, blockID beaconhttp.SegmentID) (ResolvedPath, error) {
+// 	response := ResolvedPath{
+// 		Gindex: Gindex(99),
+// 		Leaf:   Leaf("0xabcdef"),
+// 		Value:  Result("0xabcdef"),
+// 	}
+// 	return response, nil
+// }
 
 func generateProof(res *SSZQLResponse) error {
 	proofs := make([]Proof, 0, len(res.Results))

@@ -9,14 +9,17 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/erigontech/erigon/cl/beacon/beaconhttp"
 	"github.com/erigontech/erigon/common"
 	"github.com/erigontech/erigon/rpc"
 )
 
 const sszQLContentType = "application/json"
 
-var blockIDPattern = regexp.MustCompile(`^(?:latest|earliest|safe|finalized|pending|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
+var executionBlockIDPattern = regexp.MustCompile(`^(?:latest|earliest|safe|finalized|pending|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
+var consensusBlockIDPattern = regexp.MustCompile(`^(?:head|genesis|finalized|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
 var errInvalidBlockID = errors.New("invalid block_id")
+var errInvalidLayer = errors.New("invalid layer")
 
 func SSZQueryHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,29 +35,35 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	segment := r.PathValue("version")
-	if !strings.HasPrefix(segment, "v") {
-		writeQueryError(w, http.StatusNotFound, "invalid version segment")
+	versionValue := r.PathValue("version")
+	if !strings.HasPrefix(versionValue, "v") {
+		writeQueryError(w, http.StatusNotFound, "invalid version")
 		return
 	}
 
-	v := strings.TrimPrefix(segment, "v")
+	v := strings.TrimPrefix(versionValue, "v")
 	if len(v) > 1 && v[0] == '0' {
-		writeQueryError(w, http.StatusNotFound, "invalid version segment")
+		writeQueryError(w, http.StatusNotFound, "invalid version")
 		return
 	}
 	parsed, err := strconv.ParseUint(v, 10, 8)
 	if err != nil {
-		writeQueryError(w, http.StatusNotFound, "invalid version segment")
+		writeQueryError(w, http.StatusNotFound, "invalid version")
 		return
 	}
 	version := uint(parsed)
 
 	blockID := r.PathValue("blockID")
+	layer := r.PathValue("layer")
 
-	bnh, err := parseBlockIDs(blockID)
+	if layer != "consensus" && layer != "execution" {
+		writeQueryError(w, http.StatusNotFound, errInvalidLayer.Error())
+		return
+	}
+
+	br, err := parseBlockID(blockID, layer)
 	if err != nil {
-		writeQueryError(w, http.StatusNotFound, err.Error())
+		writeQueryError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -81,7 +90,7 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 
 	switch version {
 	case 1:
-		res, err = parseQueryV1(req, version, bnh)
+		res, err = parseQueryV1(req, version, br)
 	default:
 		writeQueryError(w, http.StatusNotFound, "unsupported API version")
 		return
@@ -93,11 +102,6 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeQueryResponse(w, res)
-}
-
-type queryError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
 }
 
 func writeQueryError(w http.ResponseWriter, code int, message string) {
@@ -124,9 +128,20 @@ func writeQueryResponse(w http.ResponseWriter, res SSZQLResponse) {
 	_, _ = w.Write(append(b, '\n'))
 }
 
-func parseBlockIDs(blockID string) (rpc.BlockNumberOrHash, error) {
+func parseBlockID(blockID string, layer string) (BlockRef, error) {
+	var br BlockRef
+	var err error
+	switch layer {
+	case "consensus":
+		br.consensus, err = parseConsensusBlockID(blockID)
+	case "execution":
+		br.execution, err = parseExecutionBlockID(blockID)
+	}
+	return br, err
+}
 
-	if !blockIDPattern.MatchString(blockID) {
+func parseExecutionBlockID(blockID string) (rpc.BlockNumberOrHash, error) {
+	if !executionBlockIDPattern.MatchString(blockID) {
 		return rpc.BlockNumberOrHash{}, errInvalidBlockID
 	}
 
@@ -152,4 +167,29 @@ func parseBlockIDs(blockID string) (rpc.BlockNumberOrHash, error) {
 		return rpc.BlockNumberOrHash{}, errInvalidBlockID
 	}
 	return rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(n)), nil
+}
+
+func parseConsensusBlockID(blockID string) (beaconhttp.SegmentID, error) {
+	if !consensusBlockIDPattern.MatchString(blockID) {
+		return beaconhttp.SegmentID{}, errInvalidBlockID
+	}
+
+	switch blockID {
+	case "head":
+		return beaconhttp.SegmentIDWithTag(beaconhttp.Head), nil
+	case "genesis":
+		return beaconhttp.SegmentIDWithTag(beaconhttp.Genesis), nil
+	case "finalized":
+		return beaconhttp.SegmentIDWithTag(beaconhttp.Finalized), nil
+	}
+
+	if len(blockID) == 66 {
+		return beaconhttp.SegmentIDWithRoot(common.HexToHash(blockID)), nil
+	}
+
+	slot, err := strconv.ParseUint(blockID, 10, 64)
+	if err != nil {
+		return beaconhttp.SegmentID{}, errInvalidBlockID
+	}
+	return beaconhttp.SegmentIDWithSlot(slot), nil
 }
