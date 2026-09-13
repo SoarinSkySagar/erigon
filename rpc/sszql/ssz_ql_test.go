@@ -1,11 +1,18 @@
 package sszql
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/erigontech/erigon/cmd/rpcdaemon/rpcdaemontest"
+	"github.com/erigontech/erigon/common"
+	"github.com/erigontech/erigon/execution/types"
+	"github.com/erigontech/erigon/rpc"
 )
 
 const validQueryBody = `{"queries":[{"anchor":"execution_block","path":".transactions[0].to"}]}`
@@ -16,20 +23,30 @@ const fallbackStatus = http.StatusTeapot
 const validHash = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
 
 // queryPattern mirrors the route registered in cmd/rpcdaemon/cli/config.go.
-// The wildcard names must match what the handler reads via r.PathValue.
+// The layer is fixed per registration rather than read from the path, so only
+// {version} and {blockID} are wildcards the handler reads via r.PathValue.
 const (
-	queryPattern              = "POST /eth/{version}/{layer}/{blockID}/query"
+	queryPattern              = "POST /eth/{version}/execution/{blockID}/query"
 	queryTrailingSlashPattern = queryPattern + "/{$}"
 )
+
+// stubAPI answers every block lookup, so the routing tests exercise the HTTP
+// layer without a database behind them.
+type stubAPI struct{}
+
+func (stubAPI) GetExecutionBlock(context.Context, rpc.BlockNumberOrHash) (*types.Block, error) {
+	return types.NewBlockWithHeader(&types.Header{}, nil), nil
+}
 
 func newTestMux() *http.ServeMux {
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(fallbackStatus)
 	})
+	handler := SSZQueryHandler(APIs{Execution: []rpc.API{{Service: stubAPI{}}}}, "execution")
 	mux := http.NewServeMux()
 	mux.Handle("/", fallback)
-	mux.Handle(queryPattern, SSZQueryHandler())
-	mux.Handle(queryTrailingSlashPattern, SSZQueryHandler())
+	mux.Handle(queryPattern, handler)
+	mux.Handle(queryTrailingSlashPattern, handler)
 	return mux
 }
 
@@ -78,14 +95,8 @@ func TestRouteMatchesQueryEndpoint(t *testing.T) {
 		"/eth/v1/execution/earliest/query",
 		"/eth/v1/execution/safe/query",
 		"/eth/v1/execution/finalized/query",
-		"/eth/v1/execution/pending/query",
 		"/eth/v1/execution/" + validHash + "/query",
 		"/eth/v1/execution/123/query/",
-		"/eth/v1/consensus/123/query",
-		"/eth/v1/consensus/head/query",
-		"/eth/v1/consensus/genesis/query",
-		"/eth/v1/consensus/finalized/query",
-		"/eth/v1/consensus/" + validHash + "/query",
 	} {
 		t.Run(path, func(t *testing.T) {
 			rec := doRequest(t, http.MethodPost, path, validQueryBody)
@@ -96,16 +107,24 @@ func TestRouteMatchesQueryEndpoint(t *testing.T) {
 	}
 }
 
-func TestRouteRejectsUnknownLayer(t *testing.T) {
+// Only the execution layer has a route registered, so every other layer spelling
+// - including the consensus layer, which the handler supports but config.go does
+// not yet mount - misses the mux and reaches the JSON-RPC server instead.
+func TestUnroutedLayersFallThroughToJSONRPC(t *testing.T) {
 	for _, path := range []string{
 		"/eth/v1/EXECUTION/123/query",
 		"/eth/v1/beacon/123/query",
 		"/eth/v1/exec/123/query",
+		"/eth/v1/consensus/123/query",
+		"/eth/v1/consensus/head/query",
+		"/eth/v1/consensus/genesis/query",
+		"/eth/v1/consensus/finalized/query",
+		"/eth/v1/consensus/" + validHash + "/query",
 	} {
 		t.Run(path, func(t *testing.T) {
 			rec := doRequest(t, http.MethodPost, path, validQueryBody)
-			if rec.Code != http.StatusNotFound {
-				t.Errorf("got status %d, want %d (body %q)", rec.Code, http.StatusNotFound, rec.Body.String())
+			if rec.Code != fallbackStatus {
+				t.Errorf("got status %d, want fallback to JSON-RPC (%d) (body %q)", rec.Code, fallbackStatus, rec.Body.String())
 			}
 		})
 	}
@@ -191,6 +210,7 @@ func TestRouteRejectsBogusBlockID(t *testing.T) {
 		"head",           // beacon vocabulary, not ours
 		"genesis",        // beacon vocabulary, not ours
 		"latestExecuted", // Erigon-internal tag, not exposed
+		"pending",        // no pending block source is wired up
 		"01",             // non-canonical decimal
 		"+1",
 		"-1",
@@ -370,5 +390,88 @@ func TestGindexMarshalsAsDecimalString(t *testing.T) {
 		if round != g {
 			t.Errorf("round trip: got %d, want %d", uint64(round), uint64(g))
 		}
+	}
+}
+
+func TestGetExecutionBlock(t *testing.T) {
+	m, chain, _ := rpcdaemontest.CreateTestExecModule(t)
+	api := NewSSZQLAPI(m.DB, m.BlockReader)
+	head := chain.Blocks[len(chain.Blocks)-1]
+
+	for _, tc := range []struct {
+		name    string
+		blockID string
+		want    common.Hash
+	}{
+		{"number", "2", chain.Blocks[1].Hash()},
+		{"hash", chain.Blocks[1].Hash().Hex(), chain.Blocks[1].Hash()},
+		{"latest", "latest", head.Hash()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ref, err := parseBlockID(tc.blockID, "execution")
+			if err != nil {
+				t.Fatalf("parseBlockID(%q): %v", tc.blockID, err)
+			}
+			block, err := fetchBlock(t.Context(), api, ref, "execution")
+			if err != nil {
+				t.Fatalf("fetchBlock(%q): %v", tc.blockID, err)
+			}
+			if block.execution == nil {
+				t.Fatal("got nil block")
+			}
+			if block.execution.Hash() != tc.want {
+				t.Errorf("hash: got %s, want %s", block.execution.Hash(), tc.want)
+			}
+		})
+	}
+}
+
+func TestGetExecutionBlockUnknownNumber(t *testing.T) {
+	m, _, _ := rpcdaemontest.CreateTestExecModule(t)
+	api := NewSSZQLAPI(m.DB, m.BlockReader)
+
+	ref, err := parseBlockID("999999", "execution")
+	if err != nil {
+		t.Fatalf("parseBlockID: %v", err)
+	}
+
+	var notFound rpc.BlockNotFoundErr
+	if _, err := fetchBlock(t.Context(), api, ref, "execution"); !errors.As(err, &notFound) {
+		t.Errorf("got %v, want rpc.BlockNotFoundErr", err)
+	}
+}
+
+// A block the node does not have is a miss, not an internal fault, so the
+// lookup failure must not be reported the same way as a database error.
+func TestRouteUnknownBlockReturnsNotFound(t *testing.T) {
+	m, _, _ := rpcdaemontest.CreateTestExecModule(t)
+	api := NewSSZQLAPI(m.DB, m.BlockReader)
+	handler := SSZQueryHandler(APIs{Execution: []rpc.API{{Service: api}}}, "execution")
+	mux := http.NewServeMux()
+	mux.Handle(queryPattern, handler)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+		"/eth/v1/execution/999999/query", strings.NewReader(validQueryBody))
+	req.Header.Set("Content-Type", sszQLContentType)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	assertJSONError(t, rec, http.StatusNotFound)
+}
+
+// parent_hash is a 32-byte field, so its SSZ leaf is the value itself.
+func TestResolvePathParentHash(t *testing.T) {
+	parent := common.HexToHash("0x00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	block := types.NewBlockWithHeader(&types.Header{ParentHash: parent}, nil)
+
+	got, err := resolvePath("/parent_hash", "execution_block", Block{execution: block})
+	if err != nil {
+		t.Fatalf("resolvePath: %v", err)
+	}
+	if got.Value != Result(parent.Hex()) {
+		t.Errorf("value: got %q, want %q", got.Value, parent.Hex())
+	}
+	if got.Leaf != Leaf(parent.Hex()) {
+		t.Errorf("leaf: got %q, want %q", got.Leaf, parent.Hex())
 	}
 }

@@ -1,6 +1,7 @@
 package sszql
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"mime"
@@ -11,23 +12,50 @@ import (
 
 	"github.com/erigontech/erigon/cl/beacon/beaconhttp"
 	"github.com/erigontech/erigon/common"
+	"github.com/erigontech/erigon/db/dbservices"
+	"github.com/erigontech/erigon/db/kv"
+	"github.com/erigontech/erigon/execution/types"
 	"github.com/erigontech/erigon/rpc"
+	"github.com/erigontech/erigon/rpc/rpchelper"
 )
 
 const sszQLContentType = "application/json"
 
-var executionBlockIDPattern = regexp.MustCompile(`^(?:latest|earliest|safe|finalized|pending|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
+var executionBlockIDPattern = regexp.MustCompile(`^(?:latest|earliest|safe|finalized|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
 var consensusBlockIDPattern = regexp.MustCompile(`^(?:head|genesis|finalized|0x[0-9a-fA-F]{64}|0|[1-9][0-9]*)$`)
 var errInvalidBlockID = errors.New("invalid block_id")
 var errInvalidLayer = errors.New("invalid layer")
 
-func SSZQueryHandler() http.Handler {
+func NewSSZQLAPI(db kv.RoDB, blockReader dbservices.FullBlockReader) *SSZQLImpl {
+	return &SSZQLImpl{
+		DB:          db,
+		BlockReader: blockReader,
+	}
+}
+
+func SSZQueryHandler(apis APIs, layer string) http.Handler {
+	if apis.Execution == nil {
+		return nil
+	}
+
+	var sszqlAPI SSZQLAPI
+
+	for _, r := range apis.Execution {
+		if r.Service == nil {
+			continue
+		}
+
+		if sszqlCandidate, ok := r.Service.(SSZQLAPI); ok {
+			sszqlAPI = sszqlCandidate
+		}
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleSSZQuery(w, r)
+		handleSSZQuery(sszqlAPI, w, r, layer)
 	})
 }
 
-func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
+func handleSSZQuery(api SSZQLAPI, w http.ResponseWriter, r *http.Request, layer string) {
 
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mt != sszQLContentType {
@@ -37,33 +65,38 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 
 	versionValue := r.PathValue("version")
 	if !strings.HasPrefix(versionValue, "v") {
-		writeQueryError(w, http.StatusNotFound, "invalid version")
+		writeQueryError(w, http.StatusNotFound, "invalid version segment")
 		return
 	}
 
 	v := strings.TrimPrefix(versionValue, "v")
 	if len(v) > 1 && v[0] == '0' {
-		writeQueryError(w, http.StatusNotFound, "invalid version")
+		writeQueryError(w, http.StatusNotFound, "invalid version segment")
 		return
 	}
 	parsed, err := strconv.ParseUint(v, 10, 8)
 	if err != nil {
-		writeQueryError(w, http.StatusNotFound, "invalid version")
+		writeQueryError(w, http.StatusNotFound, "invalid version segment")
 		return
 	}
 	version := uint(parsed)
 
 	blockID := r.PathValue("blockID")
-	layer := r.PathValue("layer")
 
 	if layer != "consensus" && layer != "execution" {
 		writeQueryError(w, http.StatusNotFound, errInvalidLayer.Error())
 		return
 	}
 
-	br, err := parseBlockID(blockID, layer)
+	ref, err := parseBlockID(blockID, layer)
 	if err != nil {
-		writeQueryError(w, http.StatusInternalServerError, err.Error())
+		writeQueryError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	block, err := fetchBlock(r.Context(), api, ref, layer)
+	if err != nil {
+		writeQueryError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -90,7 +123,7 @@ func handleSSZQuery(w http.ResponseWriter, r *http.Request) {
 
 	switch version {
 	case 1:
-		res, err = parseQueryV1(req, version, br)
+		res, err = parseQueryV1(req, version, block)
 	default:
 		writeQueryError(w, http.StatusNotFound, "unsupported API version")
 		return
@@ -131,12 +164,16 @@ func writeQueryResponse(w http.ResponseWriter, res SSZQLResponse) {
 func parseBlockID(blockID string, layer string) (BlockRef, error) {
 	var br BlockRef
 	var err error
+
 	switch layer {
 	case "consensus":
 		br.consensus, err = parseConsensusBlockID(blockID)
 	case "execution":
 		br.execution, err = parseExecutionBlockID(blockID)
+	default:
+		err = errInvalidLayer
 	}
+
 	return br, err
 }
 
@@ -154,8 +191,6 @@ func parseExecutionBlockID(blockID string) (rpc.BlockNumberOrHash, error) {
 		return rpc.BlockNumberOrHashWithNumber(rpc.SafeBlockNumber), nil
 	case "finalized":
 		return rpc.BlockNumberOrHashWithNumber(rpc.FinalizedBlockNumber), nil
-	case "pending":
-		return rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber), nil
 	}
 
 	if len(blockID) == 66 {
@@ -167,6 +202,42 @@ func parseExecutionBlockID(blockID string) (rpc.BlockNumberOrHash, error) {
 		return rpc.BlockNumberOrHash{}, errInvalidBlockID
 	}
 	return rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(n)), nil
+}
+
+func fetchBlock(ctx context.Context, api SSZQLAPI, ref BlockRef, layer string) (Block, error) {
+	block := Block{ref: ref}
+	if layer != "execution" {
+		return block, nil
+	}
+
+	execBlock, err := api.GetExecutionBlock(ctx, ref.execution)
+	if err != nil {
+		return Block{}, err
+	}
+	block.execution = execBlock
+
+	return block, nil
+}
+
+func (api *SSZQLImpl) GetExecutionBlock(ctx context.Context, bnh rpc.BlockNumberOrHash) (*types.Block, error) {
+
+	tx, err := api.DB.BeginRo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	_, hash, _, err := rpchelper.GetBlockNumber(ctx, bnh, tx, api.BlockReader, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	block, err := api.BlockReader.BlockByHash(ctx, tx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return block, nil
 }
 
 func parseConsensusBlockID(blockID string) (beaconhttp.SegmentID, error) {

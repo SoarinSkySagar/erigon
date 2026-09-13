@@ -1,13 +1,22 @@
 package sszql
 
 import (
+	"context"
+
 	"github.com/erigontech/erigon/cl/beacon/beaconhttp"
 	"github.com/erigontech/erigon/cl/cltypes"
+
+	"github.com/erigontech/erigon/db/dbservices"
+	"github.com/erigontech/erigon/db/kv"
 	"github.com/erigontech/erigon/execution/types"
 	"github.com/erigontech/erigon/rpc"
 )
 
 // note: derived types of Proof and Leaf can change later
+
+type SSZQLAPI interface {
+	GetExecutionBlock(ctx context.Context, bnh rpc.BlockNumberOrHash) (*types.Block, error)
+}
 
 type Path string
 
@@ -23,14 +32,25 @@ type Leaf string
 
 type Result string
 
+type APIs struct {
+	Execution []rpc.API
+	Consensus string
+}
+
 type BlockRef struct {
 	execution rpc.BlockNumberOrHash
 	consensus beaconhttp.SegmentID
 }
 
 type Block struct {
-	consensus cltypes.SignedBeaconBlock
-	execution types.Block
+	ref       BlockRef
+	consensus *cltypes.SignedBeaconBlock
+	execution *types.Block
+}
+
+type SSZQLImpl struct {
+	DB          kv.RoDB
+	BlockReader dbservices.FullBlockReader
 }
 
 type ResolvedPath struct {
