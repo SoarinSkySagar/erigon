@@ -3,6 +3,9 @@ package sszql
 import (
 	"context"
 
+	"github.com/erigontech/erigon/cl/beacon/beaconhttp"
+	"github.com/erigontech/erigon/cl/cltypes"
+
 	"github.com/erigontech/erigon/db/dbservices"
 	"github.com/erigontech/erigon/db/kv"
 	"github.com/erigontech/erigon/execution/types"
@@ -28,6 +31,22 @@ type Proof string
 type Leaf string
 
 type Result string
+
+type APIs struct {
+	Execution []rpc.API
+	Consensus string
+}
+
+type BlockRef struct {
+	execution rpc.BlockNumberOrHash
+	consensus beaconhttp.SegmentID
+}
+
+type Block struct {
+	ref       BlockRef
+	consensus *cltypes.SignedBeaconBlock
+	execution *types.Block
+}
 
 type SSZQLImpl struct {
 	DB          kv.RoDB
@@ -73,4 +92,9 @@ type SSZQLResponse struct {
 	Leaves   []Leaf          `json:"leaves"`
 	Results  []Result        `json:"results"`
 	Proofs   []Proof         `json:"proofs,omitempty"`
+}
+
+type queryError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }

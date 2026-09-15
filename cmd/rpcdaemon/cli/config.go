@@ -717,7 +717,7 @@ func startRegularRpcServer(ctx context.Context, cfg *httpcfg.HttpCfg, rpcAPI []r
 	if cfg.SSZQLEnabled {
 		mux := http.NewServeMux()
 		mux.Handle("/", srv)
-		sszqlHandler := sszql.SSZQueryHandler(defaultAPIList)
+		sszqlHandler := sszql.SSZQueryHandler(sszql.APIs{Execution: defaultAPIList}, "execution")
 		mux.Handle("POST /eth/{version}/execution/{blockID}/query", sszqlHandler)
 		mux.Handle("POST /eth/{version}/execution/{blockID}/query/{$}", sszqlHandler)
 		target = mux

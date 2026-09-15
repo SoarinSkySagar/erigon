@@ -4,11 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-
-	"github.com/erigontech/erigon/execution/types"
 )
 
-func parseQueryV1(api SSZQLAPI, request SSZQLRequest, version uint, block *types.Block) (SSZQLResponse, error) {
+func parseQueryV1(request SSZQLRequest, version uint, block Block) (SSZQLResponse, error) {
 	response := SSZQLResponse{
 		Paths:    make([]Path, 0),
 		Gindices: make([]Gindex, 0),
@@ -34,7 +32,7 @@ func parseQueryV1(api SSZQLAPI, request SSZQLRequest, version uint, block *types
 	return response, nil
 }
 
-func parseQueries(req SSZQLRequest, res *SSZQLResponse, block *types.Block, aliases map[string]string) error {
+func parseQueries(req SSZQLRequest, res *SSZQLResponse, block Block, aliases map[string]string) error {
 	for _, query := range req.Queries {
 		resolvedPath, err := resolvePath(query.Path, query.Anchor, block)
 		if err != nil {
@@ -49,7 +47,7 @@ func parseQueries(req SSZQLRequest, res *SSZQLResponse, block *types.Block, alia
 	return nil
 }
 
-func parseAliases(aliases []Alias, res *SSZQLResponse, block *types.Block) (map[string]string, error) {
+func parseAliases(aliases []Alias, res *SSZQLResponse, block Block) (map[string]string, error) {
 	m := make(map[string]string)
 
 	for _, alias := range aliases {
@@ -68,21 +66,32 @@ func parseAliases(aliases []Alias, res *SSZQLResponse, block *types.Block) (map[
 	return m, nil
 }
 
-func resolvePath(path Path, anchor Anchor, block *types.Block) (ResolvedPath, error) {
-	if path == "/parent_hash" {
+func resolvePath(path Path, anchor Anchor, block Block) (ResolvedPath, error) {
+	if path == "/parent_hash" && block.execution != nil {
+		parentHash := block.execution.ParentHash().Hex()
 		return ResolvedPath{
 			Gindex: Gindex(4),
-			Leaf:   Leaf(block.ParentHash().Hex()),
-			Value:  Result(block.ParentHash().Hex()),
+			Leaf:   Leaf(parentHash),
+			Value:  Result(parentHash),
 		}, nil
 	}
 
-	return ResolvedPath{
+	response := ResolvedPath{
 		Gindex: Gindex(99),
 		Leaf:   Leaf("0xabcdef"),
 		Value:  Result("0xabcdef"),
-	}, nil
+	}
+	return response, nil
 }
+
+// func resolveConsensusPath(path Path, anchor Anchor, blockID beaconhttp.SegmentID) (ResolvedPath, error) {
+// 	response := ResolvedPath{
+// 		Gindex: Gindex(99),
+// 		Leaf:   Leaf("0xabcdef"),
+// 		Value:  Result("0xabcdef"),
+// 	}
+// 	return response, nil
+// }
 
 func generateProof(res *SSZQLResponse) error {
 	proofs := make([]Proof, 0, len(res.Results))
